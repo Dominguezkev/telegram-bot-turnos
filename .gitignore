@@ -1,0 +1,8 @@
+# Entorno virtual compartido del repo (ver README principal)
+venv/
+
+# Claves: el token del bot nunca se sube
+.env
+
+__pycache__/
+*.pyc
