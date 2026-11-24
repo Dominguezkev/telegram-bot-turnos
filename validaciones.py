@@ -45,6 +45,18 @@ def _parsear(texto: str, anio_base: int) -> tuple[datetime | None, bool]:
         return None, False
 
 
+def validar_nombre(texto: str) -> tuple[str | None, str | None]:
+    """Devuelve (nombre_limpio, None) o (None, mensaje_de_error).
+
+    Junta los espacios repetidos y saca los de los bordes: "  Ana   María "
+    se guarda como "Ana María".
+    """
+    nombre = " ".join(texto.split())
+    if not 2 <= len(nombre) <= 50:
+        return None, textos.ERROR_NOMBRE
+    return nombre, None
+
+
 def validar_fecha(
     texto: str, ahora: datetime | None = None
 ) -> tuple[datetime | None, str | None]:

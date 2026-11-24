@@ -81,10 +81,19 @@ ERROR_FUERA_DE_HORARIO = (
     "y sábados de 9:00 a 14:00."
 )
 
+ERROR_NOMBRE = "Escribí un nombre de entre 2 y 50 caracteres."
+
 TURNO_OCUPADO = (
     "😕 Ese horario ya está ocupado.\n\n"
     "🕒 Ya reservados el {dia}: {horas}\n\n"
     "Elegí otro horario (o mandá /cancelar)."
+)
+
+AVISO_DUENO = (
+    "🔔 Nuevo turno\n"
+    "👤 {nombre} (Telegram: {cliente})\n"
+    "✂️ {servicio}\n"
+    "🕒 {cuando}"
 )
 
 CONFIRMACION = (
@@ -117,4 +126,4 @@ AYUDA = (
 
 OPCION_INVALIDA = "Esa opción ya no está disponible. Te dejo el menú de nuevo 👇"
 
-MENSAJE_ERROR = "Uy, algo salió mal de mi lado. Probá de nuevo en un ratito."
+MENSAJE_ERROR = "Ups, algo falló. Probá de nuevo con /start."

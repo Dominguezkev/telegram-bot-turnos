@@ -4,22 +4,24 @@ Bot para un negocio chico (acá, una peluquería de ejemplo) que atiende a los
 clientes por Telegram: responde las consultas de siempre con botones, manda la
 ubicación en un mapa y toma turnos paso a paso.
 
-> 🚧 **Estado: Días 1 a 5 terminados.** Funcionan `/start`, el menú con botones,
+> 🚧 **Estado: Días 1 a 7 terminados.** Funcionan `/start`, el menú con botones,
 > `/horarios`, `/precios`, `/ubicacion` (con mapa), `/ayuda` y el flujo de
-> reserva con `ConversationHandler` (`/reservar` + `/cancelar`). Las fechas se
-> validan contra el calendario y el horario de atención, y los turnos se
-> guardan en **SQLite**, que rechaza dos reservas en el mismo horario.
+> reserva con `ConversationHandler` (`/reservar` + `/cancelar`). Las fechas y
+> el nombre se validan, los turnos se guardan en **SQLite** (sin duplicados) y
+> el dueño recibe un **aviso por Telegram** cuando entra una reserva.
 
 ## Qué hace ahora
 
 - `/start`: saluda y muestra el menú (📅 Reservar turno · 🕒 Horarios · 💲 Precios · 📍 Ubicación).
 - `/reservar`: guía al cliente paso a paso (nombre → servicio → día/hora).
   También se puede iniciar tocando **📅 Reservar turno** en el menú.
+- Valida el nombre: entre 2 y 50 caracteres, con espacios normalizados.
 - Valida la fecha: formato, que no sea pasada, que no sea domingo y que esté
   dentro del horario de atención (sábados hasta más temprano). Si está mal,
   vuelve a preguntar sin perder lo ya cargado.
 - Guarda el turno en `turnos.db`. Si el horario ya está ocupado, muestra las
   horas tomadas de ese día y vuelve a preguntar.
+- Avisa al dueño por Telegram con el nombre, el servicio y el horario.
 - `/cancelar`: corta la reserva en cualquier paso.
 - `/horarios`, `/precios`, `/ubicacion`: responden también como comandos sueltos.
 - `/ubicacion` manda la dirección y después el mapa con `reply_location`.
@@ -59,6 +61,22 @@ El `.env` está en `.gitignore`: nunca se sube al repo. Si lo subiste por error,
 regenerá el token en BotFather con `/revoke` (borrar el archivo no alcanza,
 queda en el historial de git).
 
+### Configurar el aviso al dueño
+
+1. Escribile a [@userinfobot](https://t.me/userinfobot) y copiá tu ID numérico.
+2. Agregalo al `.env`:
+
+```dotenv
+OWNER_ID=123456789
+```
+
+3. Mandale `/start` a tu bot **una sola vez**. Telegram no permite que un bot
+   le escriba primero a una persona: si el dueño no hizo `/start`, el aviso
+   falla (el bot lo registra y la reserva sigue funcionando).
+
+Sin `OWNER_ID` el bot atiende igual, pero no manda avisos: al arrancar deja un
+warning en la terminal.
+
 ### Correr el bot
 
 ```bash
@@ -80,8 +98,8 @@ Abrí el bot en Telegram, mandá `/start` y probá los botones. `Ctrl+C` lo fren
 ```
 /reservar (o botón 📅)
    ↓
-¿Cómo te llamás?           → el cliente escribe su nombre
-   ↓
+¿Cómo te llamás?           → validaciones.py limpia y valida (2 a 50 caracteres)
+   ↓                          si está mal, vuelve a preguntar (estado NOMBRE)
 ¿Qué servicio querés?      → botones: Corte / Corte + barba / Color / Peinado
    ↓
 ¿Qué día y hora?           → el cliente escribe, ej: 25/11 15:00
@@ -93,7 +111,9 @@ validaciones.py revisa formato, fecha futura, domingo y horario
 database.py guarda el turno (restricción UNIQUE)
    ├── si está ocupado → muestra las horas tomadas y vuelve a preguntar
    ↓
-✅ Resumen del turno con la fecha completa
+✅ Confirmación al cliente
+   ↓
+🔔 Aviso al dueño (si falla, queda en el log y la reserva no se rompe)
 ```
 
 - Los estados (`NOMBRE`, `SERVICIO`, `HORA`) los maneja un `ConversationHandler`.
@@ -154,14 +174,32 @@ sqlite3 turnos.db "SELECT * FROM turnos ORDER BY fecha_hora;"
 > ⚠️ En Railway o Render el disco se puede borrar en cada reinicio. En el
 > despliegue hay que montar un volumen persistente o pasar a PostgreSQL.
 
+## Aviso al dueño
+
+Cada turno nuevo le llega al dueño por Telegram:
+
+```text
+🔔 Nuevo turno
+👤 Ana (Telegram: Ana Pérez (@ana))
+✂️ Corte
+🕒 25/11/2026 15:00
+```
+
+- Se manda **después** de guardar el turno y confirmarle al cliente.
+- `avisar_dueno()` atrapa `TelegramError` (por ejemplo, si el dueño nunca hizo
+  `/start`) y solo lo registra en el log: la reserva y la confirmación no se
+  pierden.
+- Para la demo: dos celulares o dos cuentas, uno reserva y el otro recibe el
+  aviso.
+
 ## Personalizarlo para otro negocio
 
 Casi todo está en [`textos.py`](textos.py): nombre, horarios, precios,
-dirección y coordenadas. Los horarios son tuplas (`HORARIO_SEMANA`,
-`HORARIO_SABADO`) para que el texto de `/horarios` y la validación de turnos
-usen los mismos números. Para las coordenadas, abrí Google Maps, hacé clic
-derecho sobre el local → "¿Qué hay aquí?" y copiá los dos números en
-`LATITUD` y `LONGITUD`.
+dirección, coordenadas y el formato del aviso al dueño (`AVISO_DUENO`). Los
+horarios son tuplas (`HORARIO_SEMANA`, `HORARIO_SABADO`) para que el texto de
+`/horarios` y la validación de turnos usen los mismos números. Para las
+coordenadas, abrí Google Maps, hacé clic derecho sobre el local → "¿Qué hay
+aquí?" y copiá los dos números en `LATITUD` y `LONGITUD`.
 
 Después, en [`bot.py`](bot.py), cambiá las etiquetas de los botones si querés
 otros rubros (por ejemplo "🛠 Servicios" en vez de "💲 Precios").
@@ -171,18 +209,19 @@ otros rubros (por ejemplo "🛠 Servicios" en vez de "💲 Precios").
 ```text
 telegram-bot-turnos/
 ├── bot.py              # handlers, teclados, conversación y arranque
-├── config.py           # lee TOKEN desde .env y falla con un mensaje claro
+├── config.py           # lee TOKEN y OWNER_ID desde .env
 ├── database.py         # SQLite: tabla, guardar turno y horarios ocupados
 ├── textos.py           # textos y datos del negocio (editar acá)
-├── validaciones.py     # validación de fechas/horarios, sin Telegram
+├── validaciones.py     # validación de nombre y fechas/horarios, sin Telegram
 ├── turnos.db           # se crea al arrancar (ignorado por git)
 ├── .env.example        # plantilla del .env
 ├── requirements.txt
 ├── requirements-dev.txt
 └── tests/
-    ├── test_bot.py           # textos, botones, mapa y flujo de reserva
+    ├── test_bot.py           # textos, botones, mapa, reserva, aviso y errores
+    ├── test_config.py        # lectura de OWNER_ID desde el entorno
     ├── test_database.py      # duplicados, horarios ocupados y SQL injection
-    └── test_validaciones.py  # fechas válidas, pasadas, domingos y horarios
+    └── test_validaciones.py  # nombre y fechas válidas, pasadas, domingos y horarios
 ```
 
 ## Tests
@@ -194,14 +233,17 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-`test_database.py` usa los fixtures `tmp_path` y `monkeypatch` de pytest (base
-temporal, sin tocar `turnos.db`), así que ese archivo necesita pytest. Los
-otros dos también se pueden correr sin pytest:
+`test_database.py` y `test_config.py` usan fixtures de pytest (`tmp_path`,
+`monkeypatch`, `pytest.raises`), así que esos archivos necesitan pytest.
+`test_bot.py` y `test_validaciones.py` también se pueden correr sin pytest:
 
 ```bash
 python tests/test_bot.py
 python tests/test_validaciones.py
 ```
+
+Los tests del aviso usan `AsyncMock` para simular el envío y comprobar que, si
+Telegram rechaza el mensaje, el cliente igual recibe su confirmación.
 
 ## Seguridad
 
@@ -211,13 +253,16 @@ python tests/test_validaciones.py
 | Logs sin token | `httpx` bajado a WARNING: sus URLs incluyen el token |
 | SQL parametrizado | Los valores van con `?`: un nombre con comillas no altera la base |
 | Base fuera de git | `turnos.db` tiene datos de clientes y está ignorado |
+| Aviso aislado | Si falla el mensaje al dueño, la reserva no se rompe |
+| Nombre validado | 2 a 50 caracteres, sin espacios de más |
 | Error controlado | El usuario ve un mensaje genérico, el detalle va al log |
 | Opción inválida | Un botón viejo no rompe nada: se muestra el menú |
 | `/revoke` documentado | Si el token se filtra, se regenera en BotFather |
 
 ## Próximos pasos
 
-1. Día 6-7: avisarle al dueño por Telegram cuando entra un turno nuevo.
-2. Día 8-9: `/turnos` solo para el dueño (verificando su ID).
-3. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
+1. Día 8-9: `/turnos` solo para el dueño (verificando su `OWNER_ID`) y
+   cancelación de turnos ya guardados.
+2. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
    como variable de entorno y un volumen para `turnos.db`.
+3. Semana 2: README con capturas, video demo de 1-2 minutos y propuestas.

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import textos              # noqa: E402
-from validaciones import validar_fecha   # noqa: E402
+from validaciones import validar_fecha, validar_nombre   # noqa: E402
 
 # Martes 24/11/2026 a las 10:00. Todos los tests parten de esta fecha.
 AHORA = datetime(2026, 11, 24, 10, 0)
@@ -114,6 +114,31 @@ def test_enero_en_noviembre_sigue_siendo_pasado():
     # En noviembre, "05/01" es enero de este año: ya pasó.
     _, error = validar_fecha("05/01 15:00", AHORA)
     assert error == textos.ERROR_FECHA_PASADA
+
+
+def test_nombre_valido_y_limpio():
+    nombre, error = validar_nombre("  Ana   María ")
+
+    assert error is None
+    assert nombre == "Ana María"
+
+
+def test_nombre_muy_corto_o_largo():
+    assert validar_nombre("A")[1] == textos.ERROR_NOMBRE
+    assert validar_nombre("x" * 51)[1] == textos.ERROR_NOMBRE
+
+
+def test_nombre_en_los_limites():
+    assert validar_nombre("Al")[0] == "Al"
+    assert validar_nombre("x" * 50)[0] == "x" * 50
+
+
+def test_nombre_solo_espacios():
+    assert validar_nombre("   \n\t ")[1] == textos.ERROR_NOMBRE
+
+
+def test_nombre_con_tabs_y_saltos_se_normaliza():
+    assert validar_nombre("Ana\tMaría\nPérez")[0] == "Ana María Pérez"
 
 
 if __name__ == "__main__":

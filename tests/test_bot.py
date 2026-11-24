@@ -11,12 +11,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 # Permite importar bot.py y textos.py desde cualquier carpeta
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telegram import ReplyKeyboardRemove                       # noqa: E402
+from telegram.error import TelegramError                       # noqa: E402
 from telegram.ext import (                                      # noqa: E402
     CallbackQueryHandler,
     CommandHandler,
@@ -74,6 +75,7 @@ def update_de(texto):
         message=mensaje,
         effective_message=mensaje,
         effective_chat=SimpleNamespace(id=123),
+        effective_user=SimpleNamespace(full_name="Ana Pérez", username="ana"),
     ), mensaje
 
 
@@ -119,7 +121,8 @@ def test_no_quedan_marcadores_sin_completar():
                    "AYUDA", "PREGUNTA_NOMBRE", "PREGUNTA_SERVICIO",
                    "PREGUNTA_HORA", "CONFIRMACION", "ERROR_FECHA_FORMATO",
                    "ERROR_FECHA_PASADA", "ERROR_DOMINGO",
-                   "ERROR_FUERA_DE_HORARIO"):
+                   "ERROR_FUERA_DE_HORARIO", "ERROR_NOMBRE",
+                   "TURNO_OCUPADO", "AVISO_DUENO"):
         valor = getattr(textos, nombre)
         assert "TODO" not in valor and "tu_" not in valor
 
@@ -205,9 +208,12 @@ def test_flujo_completo_de_reserva():
         guardados.append((chat_id, nombre, servicio, fecha))
         return True
 
+    aviso = AsyncMock()
     with patch.object(
         bot, "validar_fecha", lambda texto: validar_fecha(texto, AHORA)
-    ), patch.object(bot, "guardar_turno", guardar_falso):
+    ), patch.object(bot, "guardar_turno", guardar_falso), patch.object(
+        bot, "avisar_dueno", aviso
+    ):
         estado = asyncio.run(bot.confirmar(update, context))
     assert estado == ConversationHandler.END
     confirmacion = mensaje.textos[0][0]
@@ -215,7 +221,35 @@ def test_flujo_completo_de_reserva():
     assert "Corte" in confirmacion
     assert "25/11/2026 15:00" in confirmacion
     assert guardados == [(123, "Ana", "Corte", datetime(2026, 11, 25, 15, 0))]
+    assert aviso.await_args.args[1:] == (
+        "Ana",
+        "Corte",
+        datetime(2026, 11, 25, 15, 0),
+        "Ana Pérez (@ana)",
+    )
     assert context.user_data == {}, "no hay que dejar datos de la reserva vieja"
+
+
+def test_nombre_invalido_vuelve_a_preguntar():
+    context = SimpleNamespace(user_data={})
+    update, mensaje = update_de("A")
+
+    estado = asyncio.run(bot.pedir_servicio(update, context))
+
+    assert estado == bot.NOMBRE, "tiene que quedarse esperando otro nombre"
+    assert mensaje.textos[0][0].startswith("❌")
+    assert "nombre" in mensaje.textos[0][0].lower()
+    assert "nombre" not in context.user_data
+
+
+def test_nombre_valido_se_guarda_limpio():
+    context = SimpleNamespace(user_data={})
+    update, _ = update_de("  Ana   María ")
+
+    estado = asyncio.run(bot.pedir_servicio(update, context))
+
+    assert estado == bot.SERVICIO
+    assert context.user_data["nombre"] == "Ana María"
 
 
 def test_confirmar_rechaza_horario_ocupado_y_muestra_cuales():
@@ -278,6 +312,96 @@ def test_cancelar_fuera_de_reserva_no_rompe():
     assert mensaje.textos[0][0] == textos.SIN_RESERVA
 
 
+# --- Aviso al dueño -------------------------------------------------------
+
+def test_aviso_al_dueno_manda_chat_id_y_detalle():
+    enviar = AsyncMock()
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=enviar))
+
+    with patch.object(bot, "OWNER_ID", 999):
+        asyncio.run(bot.avisar_dueno(
+            context,
+            "Ana",
+            "Corte",
+            datetime(2026, 11, 25, 15, 0),
+            "Ana Pérez (@ana)",
+        ))
+
+    enviar.assert_awaited_once()
+    kwargs = enviar.await_args.kwargs
+    assert kwargs["chat_id"] == 999
+    assert "Ana" in kwargs["text"]
+    assert "Corte" in kwargs["text"]
+    assert "25/11/2026 15:00" in kwargs["text"]
+    assert "@ana" in kwargs["text"]
+
+
+def test_aviso_al_dueno_no_explota_si_telegram_falla():
+    enviar = AsyncMock(side_effect=TelegramError("bot was blocked by the user"))
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=enviar))
+
+    with patch.object(bot, "OWNER_ID", 999), patch.object(bot.logger, "error"):
+        asyncio.run(bot.avisar_dueno(
+            context,
+            "Ana",
+            "Corte",
+            datetime(2026, 11, 25, 15, 0),
+            "Ana Pérez",
+        ))
+
+    enviar.assert_awaited_once()
+
+
+def test_sin_owner_id_no_intenta_avisar():
+    enviar = AsyncMock()
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=enviar))
+
+    with patch.object(bot, "OWNER_ID", None), patch.object(bot.logger, "warning"):
+        asyncio.run(bot.avisar_dueno(
+            context,
+            "Ana",
+            "Corte",
+            datetime(2026, 11, 25, 15, 0),
+            "Ana Pérez",
+        ))
+
+    enviar.assert_not_awaited()
+
+
+def test_si_falla_el_aviso_el_cliente_igual_recibe_la_confirmacion():
+    context = SimpleNamespace(
+        user_data={"nombre": "Ana", "servicio": "Corte"},
+        bot=SimpleNamespace(
+            send_message=AsyncMock(side_effect=TelegramError("bloqueado"))
+        ),
+    )
+    update, mensaje = update_de("25/11 15:00")
+
+    with patch.object(bot, "OWNER_ID", 999), patch.object(
+        bot.logger, "error"
+    ), patch.object(
+        bot, "validar_fecha", lambda texto: validar_fecha(texto, AHORA)
+    ), patch.object(bot, "guardar_turno", lambda *args: True):
+        estado = asyncio.run(bot.confirmar(update, context))
+
+    assert estado == ConversationHandler.END
+    assert "Turno reservado" in mensaje.textos[0][0]
+    assert context.user_data == {}
+    context.bot.send_message.assert_awaited_once()
+
+
+# --- Errores no manejados -------------------------------------------------
+
+def test_error_handler_avisa_al_usuario():
+    mensaje = MensajeFalso()
+    update = SimpleNamespace(effective_message=mensaje)
+
+    with patch.object(bot.logger, "error"):
+        asyncio.run(bot.manejar_error(update, SimpleNamespace(error=RuntimeError("boom"))))
+
+    assert mensaje.textos[0][0] == textos.MENSAJE_ERROR
+
+
 # --- Cableado del ConversationHandler -------------------------------------
 
 def test_conversacion_entra_por_comando_y_por_boton():
@@ -307,6 +431,12 @@ def test_la_conversacion_se_registra_antes_del_boton_generico():
 
     # Si el genérico va primero, se come el toque de "reservar".
     assert indice_conversacion < indice_callback
+
+
+def test_la_app_registra_el_manejador_de_errores():
+    app = bot.crear_app("123456789:AAHfake-token-para-probar")
+
+    assert bot.manejar_error in app.error_handlers
 
 
 if __name__ == "__main__":

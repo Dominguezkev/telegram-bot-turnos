@@ -1,13 +1,13 @@
-"""Bot de Telegram para una peluquería — Días 1 a 5 del proyecto.
+"""Bot de Telegram para una peluquería — Días 1 a 7 del proyecto.
 
-Hoy hace cuatro cosas:
+Hoy hace estas cosas:
 - /start muestra un menú con botones.
 - Responde horarios, precios y ubicación (también como comandos).
 - Manda el mapa del local con reply_location.
 - /reservar guía al cliente paso a paso: nombre → servicio → día/hora,
-  validando la fecha y guardando el turno en SQLite.
-
-La base de datos impide dos turnos en el mismo horario (restricción UNIQUE).
+  validando los datos y guardando el turno en SQLite.
+- Le avisa al dueño por Telegram cuando entra un turno nuevo.
+- La base de datos impide dos turnos en el mismo horario (restricción UNIQUE).
 
 Ejecutar desde la carpeta del proyecto:
     python bot.py
@@ -28,6 +28,7 @@ from telegram import (
     Update,
 )
 from telegram.warnings import PTBUserWarning
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -39,11 +40,14 @@ from telegram.ext import (
 )
 
 import textos
-from config import obtener_token
+from config import obtener_owner_id, obtener_token
 from database import guardar_turno, horarios_ocupados, init_db
-from validaciones import validar_fecha
+from validaciones import validar_fecha, validar_nombre
 
 logger = logging.getLogger(__name__)
+
+# ID de Telegram del dueño. Puede ser None: en ese caso no se mandan avisos.
+OWNER_ID = obtener_owner_id()
 
 # Estados de la conversación de reserva.
 NOMBRE, SERVICIO, HORA = range(3)
@@ -144,8 +148,15 @@ async def reservar_boton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def pedir_servicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Paso 1: guarda el nombre y ofrece los servicios con botones."""
-    context.user_data["nombre"] = update.message.text.strip()
+    """Paso 1: valida el nombre y ofrece los servicios con botones."""
+    nombre, error = validar_nombre(update.message.text)
+    if error:
+        await update.message.reply_text(
+            f"❌ {error}\n\nProbá de nuevo (o mandá /cancelar)."
+        )
+        return NOMBRE  # mismo estado: vuelve a preguntar el nombre
+
+    context.user_data["nombre"] = nombre
     await update.message.reply_text(
         textos.PREGUNTA_SERVICIO, reply_markup=teclado_servicios()
     )
@@ -160,6 +171,36 @@ async def pedir_hora(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         reply_markup=ReplyKeyboardRemove(),  # saca los botones de servicios
     )
     return HORA
+
+
+async def avisar_dueno(
+    context: ContextTypes.DEFAULT_TYPE,
+    nombre: str,
+    servicio: str,
+    fecha,
+    cliente: str,
+) -> None:
+    """Le manda el aviso al dueño. Si falla, lo registra y NO rompe la reserva.
+
+    Ejemplo de falla: el dueño nunca le mandó /start al bot, así que Telegram
+    no permite escribirle.
+    """
+    if OWNER_ID is None:
+        logger.warning("OWNER_ID no configurado: no se avisa al dueño del turno.")
+        return
+
+    texto = textos.AVISO_DUENO.format(
+        nombre=nombre,
+        cliente=cliente,
+        servicio=servicio,
+        cuando=fecha.strftime("%d/%m/%Y %H:%M"),
+    )
+    try:
+        await context.bot.send_message(chat_id=OWNER_ID, text=texto)
+    except TelegramError as e:
+        logger.error("No pude avisar al dueño: %s", e)
+    except Exception:  # el aviso es secundario: nunca frena la reserva
+        logger.exception("Error inesperado avisando al dueño")
 
 
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -203,6 +244,17 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ),
         reply_markup=ReplyKeyboardRemove(),
     )
+
+    # Primero el cliente recibe su confirmación; después avisamos al dueño.
+    # Si el aviso falla, avisar_dueno lo registra y la reserva sigue en pie.
+    usuario = update.effective_user
+    cliente = usuario.full_name if usuario else "desconocido"
+    if usuario and usuario.username:
+        cliente = f"{cliente} (@{usuario.username})"
+    await avisar_dueno(
+        context, datos["nombre"], datos["servicio"], fecha, cliente
+    )
+
     datos.clear()
     return ConversationHandler.END
 
@@ -316,11 +368,12 @@ async def registrar_comandos(app: Application) -> None:
 
 async def manejar_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Registra el error y avisa al usuario sin exponer detalles internos."""
-    logger.error("Error procesando la actualización: %s", update, exc_info=context.error)
+    logger.error("Error no manejado: %s", update, exc_info=context.error)
 
-    if isinstance(update, Update) and update.effective_message:
+    mensaje = getattr(update, "effective_message", None)
+    if mensaje:
         try:
-            await update.effective_message.reply_text(textos.MENSAJE_ERROR)
+            await mensaje.reply_text(textos.MENSAJE_ERROR)
         except Exception:  # pragma: no cover - si ni siquiera podemos avisar
             logger.exception("Tampoco se pudo avisar del error al usuario")
 
@@ -361,6 +414,10 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     init_db()  # crea turnos.db la primera vez
+    if OWNER_ID is None:
+        logger.warning(
+            "OWNER_ID no configurado: los turnos no se avisarán al dueño."
+        )
     app = crear_app(obtener_token())
 
     logger.info("Bot iniciado. Abrí Telegram y mandá /start. (Ctrl+C para frenar)")
