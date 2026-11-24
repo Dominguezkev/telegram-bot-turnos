@@ -4,5 +4,8 @@ venv/
 # Claves: el token del bot nunca se sube
 .env
 
+# Base de datos local con datos de clientes
+turnos.db*
+
 __pycache__/
 *.pyc

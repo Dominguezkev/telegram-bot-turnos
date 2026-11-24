@@ -4,11 +4,11 @@ Bot para un negocio chico (acá, una peluquería de ejemplo) que atiende a los
 clientes por Telegram: responde las consultas de siempre con botones, manda la
 ubicación en un mapa y toma turnos paso a paso.
 
-> 🚧 **Estado: Días 1 a 4 terminados.** Funcionan `/start`, el menú con botones,
+> 🚧 **Estado: Días 1 a 5 terminados.** Funcionan `/start`, el menú con botones,
 > `/horarios`, `/precios`, `/ubicacion` (con mapa), `/ayuda` y el flujo de
 > reserva con `ConversationHandler` (`/reservar` + `/cancelar`). Las fechas se
-> validan contra el calendario y el horario de atención. Los turnos se guardan
-> **en memoria** por ahora; el Día 5 pasan a SQLite.
+> validan contra el calendario y el horario de atención, y los turnos se
+> guardan en **SQLite**, que rechaza dos reservas en el mismo horario.
 
 ## Qué hace ahora
 
@@ -18,6 +18,8 @@ ubicación en un mapa y toma turnos paso a paso.
 - Valida la fecha: formato, que no sea pasada, que no sea domingo y que esté
   dentro del horario de atención (sábados hasta más temprano). Si está mal,
   vuelve a preguntar sin perder lo ya cargado.
+- Guarda el turno en `turnos.db`. Si el horario ya está ocupado, muestra las
+  horas tomadas de ese día y vuelve a preguntar.
 - `/cancelar`: corta la reserva en cualquier paso.
 - `/horarios`, `/precios`, `/ubicacion`: responden también como comandos sueltos.
 - `/ubicacion` manda la dirección y después el mapa con `reply_location`.
@@ -88,6 +90,9 @@ validaciones.py revisa formato, fecha futura, domingo y horario
    ↓
    ├── si está mal → mensaje de error y vuelve a preguntar (mismo estado HORA)
    ↓
+database.py guarda el turno (restricción UNIQUE)
+   ├── si está ocupado → muestra las horas tomadas y vuelve a preguntar
+   ↓
 ✅ Resumen del turno con la fecha completa
 ```
 
@@ -99,8 +104,7 @@ validaciones.py revisa formato, fecha futura, domingo y horario
   diciembre entiende que un enero es del año siguiente).
 - `/cancelar` funciona en cualquier paso y `/start` también corta la reserva
   y vuelve al menú.
-- **Los turnos viven en memoria**: si el bot se reinicia, se pierden. Pasarlos
-  a SQLite es el paso siguiente.
+- **Los turnos se guardan en `turnos.db`**: sobreviven a los reinicios del bot.
 
 > 💡 El botón del menú entra al mismo flujo que `/reservar` mediante un
 > `CallbackQueryHandler` como `entry_point` de la conversación.
@@ -121,6 +125,35 @@ para poder testearla con una fecha fija:
 Los horarios están en `textos.py` (`HORARIO_SEMANA` y `HORARIO_SABADO`) y se
 usan tanto para el texto de `/horarios` como para la validación.
 
+## Base de datos
+
+Los turnos se guardan en `turnos.db`, un archivo SQLite junto al bot:
+
+| Columna | Tipo | Para qué |
+|---|---|---|
+| `id` | INTEGER | Clave primaria autoincremental |
+| `chat_id` | INTEGER | Chat de Telegram del cliente |
+| `nombre` | TEXT | Nombre que escribió |
+| `servicio` | TEXT | Corte, Color, etc. |
+| `fecha_hora` | TEXT | `2026-11-25 15:00`, con **UNIQUE** |
+
+La restricción `UNIQUE` es la que impide dos turnos a la misma hora, incluso
+si dos clientes confirman al mismo tiempo. `guardar_turno()` no revisa "a
+mano": intenta insertar y, si SQLite lanza `IntegrityError`, devuelve `False`.
+
+`horarios_ocupados(dia)` consulta las horas tomadas de un día y el bot las
+muestra cuando rechaza un horario.
+
+El archivo está en `.gitignore` porque tiene datos de clientes:
+
+```bash
+# ver los turnos cargados
+sqlite3 turnos.db "SELECT * FROM turnos ORDER BY fecha_hora;"
+```
+
+> ⚠️ En Railway o Render el disco se puede borrar en cada reinicio. En el
+> despliegue hay que montar un volumen persistente o pasar a PostgreSQL.
+
 ## Personalizarlo para otro negocio
 
 Casi todo está en [`textos.py`](textos.py): nombre, horarios, precios,
@@ -139,13 +172,16 @@ otros rubros (por ejemplo "🛠 Servicios" en vez de "💲 Precios").
 telegram-bot-turnos/
 ├── bot.py              # handlers, teclados, conversación y arranque
 ├── config.py           # lee TOKEN desde .env y falla con un mensaje claro
+├── database.py         # SQLite: tabla, guardar turno y horarios ocupados
 ├── textos.py           # textos y datos del negocio (editar acá)
 ├── validaciones.py     # validación de fechas/horarios, sin Telegram
+├── turnos.db           # se crea al arrancar (ignorado por git)
 ├── .env.example        # plantilla del .env
 ├── requirements.txt
 ├── requirements-dev.txt
 └── tests/
     ├── test_bot.py           # textos, botones, mapa y flujo de reserva
+    ├── test_database.py      # duplicados, horarios ocupados y SQL injection
     └── test_validaciones.py  # fechas válidas, pasadas, domingos y horarios
 ```
 
@@ -158,7 +194,9 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
-También se pueden correr sin pytest, archivo por archivo:
+`test_database.py` usa los fixtures `tmp_path` y `monkeypatch` de pytest (base
+temporal, sin tocar `turnos.db`), así que ese archivo necesita pytest. Los
+otros dos también se pueden correr sin pytest:
 
 ```bash
 python tests/test_bot.py
@@ -171,14 +209,15 @@ python tests/test_validaciones.py
 |---|---|
 | Token en `.env` | Ni en el código ni en GitHub; `.env` está ignorado |
 | Logs sin token | `httpx` bajado a WARNING: sus URLs incluyen el token |
+| SQL parametrizado | Los valores van con `?`: un nombre con comillas no altera la base |
+| Base fuera de git | `turnos.db` tiene datos de clientes y está ignorado |
 | Error controlado | El usuario ve un mensaje genérico, el detalle va al log |
 | Opción inválida | Un botón viejo no rompe nada: se muestra el menú |
 | `/revoke` documentado | Si el token se filtra, se regenera en BotFather |
 
 ## Próximos pasos
 
-1. Día 5: guardar los turnos en SQLite y evitar dos reservas en el mismo horario.
-2. Día 6-7: avisarle al dueño por Telegram cuando entra un turno nuevo.
-3. Día 8-9: `/turnos` solo para el dueño (verificando su ID).
-4. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
-   como variable de entorno.
+1. Día 6-7: avisarle al dueño por Telegram cuando entra un turno nuevo.
+2. Día 8-9: `/turnos` solo para el dueño (verificando su ID).
+3. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
+   como variable de entorno y un volumen para `turnos.db`.

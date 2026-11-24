@@ -1,13 +1,13 @@
-"""Bot de Telegram para una peluquería — Días 1 a 4 del proyecto.
+"""Bot de Telegram para una peluquería — Días 1 a 5 del proyecto.
 
 Hoy hace cuatro cosas:
 - /start muestra un menú con botones.
 - Responde horarios, precios y ubicación (también como comandos).
 - Manda el mapa del local con reply_location.
 - /reservar guía al cliente paso a paso: nombre → servicio → día/hora,
-  validando que la fecha sea futura y esté dentro del horario de atención.
+  validando la fecha y guardando el turno en SQLite.
 
-La reserva se guarda en memoria por ahora; en el próximo paso va a SQLite.
+La base de datos impide dos turnos en el mismo horario (restricción UNIQUE).
 
 Ejecutar desde la carpeta del proyecto:
     python bot.py
@@ -40,6 +40,7 @@ from telegram.ext import (
 
 import textos
 from config import obtener_token
+from database import guardar_turno, horarios_ocupados, init_db
 from validaciones import validar_fecha
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,25 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return HORA
 
     datos = context.user_data
+    guardado = guardar_turno(
+        update.effective_chat.id,
+        datos["nombre"],
+        datos["servicio"],
+        fecha,
+    )
+
+    if not guardado:
+        # La base rechazó el turno por el UNIQUE: mostramos qué horas quedan
+        # tomadas ese día y volvemos al mismo estado para elegir otra.
+        horas = ", ".join(horarios_ocupados(fecha))
+        await update.message.reply_text(
+            textos.TURNO_OCUPADO.format(
+                dia=fecha.strftime("%d/%m"), horas=horas
+            ),
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return HORA
+
     await update.message.reply_text(
         textos.CONFIRMACION.format(
             nombre=datos["nombre"],
@@ -183,7 +203,6 @@ async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ),
         reply_markup=ReplyKeyboardRemove(),
     )
-    # En el día 5 esto pasa a guardarse en SQLite.
     datos.clear()
     return ConversationHandler.END
 
@@ -341,6 +360,7 @@ def main() -> None:
     # incluye el token: en INFO lo estaríamos filtrando en los logs.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    init_db()  # crea turnos.db la primera vez
     app = crear_app(obtener_token())
 
     logger.info("Bot iniciado. Abrí Telegram y mandá /start. (Ctrl+C para frenar)")

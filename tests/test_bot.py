@@ -70,7 +70,11 @@ def botones(teclado):
 def update_de(texto):
     """Arma un update como el que llega cuando el cliente escribe."""
     mensaje = MensajeFalso(texto)
-    return SimpleNamespace(message=mensaje, effective_message=mensaje), mensaje
+    return SimpleNamespace(
+        message=mensaje,
+        effective_message=mensaje,
+        effective_chat=SimpleNamespace(id=123),
+    ), mensaje
 
 
 # --- Menú y consultas -----------------------------------------------------
@@ -193,18 +197,44 @@ def test_flujo_completo_de_reserva():
     assert context.user_data["servicio"] == "Corte"
     assert isinstance(mensaje.textos[0][1], ReplyKeyboardRemove)
 
-    # fecha → valida, confirma y termina
+    # fecha → valida, guarda, confirma y termina
     update, mensaje = update_de("25/11 15:00")
+    guardados = []
+
+    def guardar_falso(chat_id, nombre, servicio, fecha):
+        guardados.append((chat_id, nombre, servicio, fecha))
+        return True
+
     with patch.object(
         bot, "validar_fecha", lambda texto: validar_fecha(texto, AHORA)
-    ):
+    ), patch.object(bot, "guardar_turno", guardar_falso):
         estado = asyncio.run(bot.confirmar(update, context))
     assert estado == ConversationHandler.END
     confirmacion = mensaje.textos[0][0]
     assert "Ana" in confirmacion
     assert "Corte" in confirmacion
     assert "25/11/2026 15:00" in confirmacion
+    assert guardados == [(123, "Ana", "Corte", datetime(2026, 11, 25, 15, 0))]
     assert context.user_data == {}, "no hay que dejar datos de la reserva vieja"
+
+
+def test_confirmar_rechaza_horario_ocupado_y_muestra_cuales():
+    context = SimpleNamespace(user_data={"nombre": "Ana", "servicio": "Corte"})
+    update, mensaje = update_de("25/11 15:00")
+
+    with patch.object(
+        bot, "validar_fecha", lambda texto: validar_fecha(texto, AHORA)
+    ), patch.object(bot, "guardar_turno", lambda *args: False), patch.object(
+        bot, "horarios_ocupados", lambda fecha: ["15:00", "16:30"]
+    ):
+        estado = asyncio.run(bot.confirmar(update, context))
+
+    respuesta = mensaje.textos[0][0]
+    assert estado == bot.HORA, "tiene que volver a pedir otro horario"
+    assert "ocupado" in respuesta.lower()
+    assert "25/11" in respuesta
+    assert "15:00, 16:30" in respuesta
+    assert context.user_data == {"nombre": "Ana", "servicio": "Corte"}
 
 
 def test_confirmar_con_fecha_invalida_vuelve_a_preguntar():

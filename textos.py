@@ -81,6 +81,12 @@ ERROR_FUERA_DE_HORARIO = (
     "y sábados de 9:00 a 14:00."
 )
 
+TURNO_OCUPADO = (
+    "😕 Ese horario ya está ocupado.\n\n"
+    "🕒 Ya reservados el {dia}: {horas}\n\n"
+    "Elegí otro horario (o mandá /cancelar)."
+)
+
 CONFIRMACION = (
     "✅ Turno reservado\n\n"
     "👤 {nombre}\n"
