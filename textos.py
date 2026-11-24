@@ -1,7 +1,7 @@
 """Todos los textos y datos del negocio, en un solo lugar.
 
 Para adaptar el bot a otro cliente alcanza con cambiar este archivo:
-nombre, horarios, precios, dirección y coordenadas.
+nombre, horarios, precios, servicios, dirección y coordenadas.
 """
 
 NEGOCIO = "Peluquería Aurora"
@@ -46,14 +46,49 @@ CONSULTAS = {
     "precios": PRECIOS,
 }
 
+# --- Reserva de turnos ----------------------------------------------------
+
+# Opciones que aparecen como botones al reservar.
+SERVICIOS = ["Corte", "Corte + barba", "Color", "Peinado"]
+
+RESERVA_INTRO = "📅 Perfecto, vamos a reservar tu turno."
+
+PREGUNTA_NOMBRE = "¿Cómo te llamás?"
+
+PREGUNTA_SERVICIO = "¿Qué servicio querés?"
+
+PREGUNTA_HORA = (
+    "¿Qué día y hora te queda cómodo?\n\n"
+    "Escribilo así: 25/11 15:00\n\n"
+    "Podés cancelar cuando quieras con /cancelar."
+)
+
+CONFIRMACION = (
+    "✅ Turno reservado\n\n"
+    "👤 {nombre}\n"
+    "✂️ {servicio}\n"
+    "🕒 {cuando}\n\n"
+    "Te esperamos. Si necesitás cambiarlo, mandá /reservar de nuevo."
+)
+
+RESERVA_CANCELADA = (
+    "Reserva cancelada. Cuando quieras, empezá de nuevo con /reservar."
+)
+
+SIN_RESERVA = "No hay ninguna reserva en curso. Para sacar un turno mandá /reservar."
+
+RESERVA_INTERRUMPIDA = "Cancelé la reserva que tenías a medias."
+
 AYUDA = (
     "Esto es lo que puedo hacer por ahora:\n\n"
     "/start — menú principal con botones\n"
+    "/reservar — sacar un turno paso a paso\n"
+    "/cancelar — cancelar una reserva a medias\n"
     "/horarios — días y horas de atención\n"
     "/precios — lista de precios\n"
     "/ubicacion — dirección y mapa\n"
     "/ayuda — este mensaje\n\n"
-    "Pronto también vas a poder reservar tu turno desde acá."
+    "¿Querés un turno? Mandá /reservar."
 )
 
 OPCION_INVALIDA = "Esa opción ya no está disponible. Te dejo el menú de nuevo 👇"
