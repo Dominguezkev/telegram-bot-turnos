@@ -8,8 +8,10 @@ Correrlos desde la carpeta del proyecto:
 """
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 # Permite importar bot.py y textos.py desde cualquier carpeta
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +25,10 @@ from telegram.ext import (                                      # noqa: E402
 
 import bot        # noqa: E402
 import textos     # noqa: E402
+from validaciones import validar_fecha                          # noqa: E402
+
+# "Ahora" fijo para los tests que pasan por bot.confirmar.
+AHORA = datetime(2026, 11, 24, 10, 0)
 
 
 class MensajeFalso:
@@ -107,7 +113,9 @@ def test_ayuda_lista_todos_los_comandos():
 def test_no_quedan_marcadores_sin_completar():
     for nombre in ("SALUDO", "HORARIOS", "PRECIOS", "UBICACION_TEXTO",
                    "AYUDA", "PREGUNTA_NOMBRE", "PREGUNTA_SERVICIO",
-                   "PREGUNTA_HORA", "CONFIRMACION"):
+                   "PREGUNTA_HORA", "CONFIRMACION", "ERROR_FECHA_FORMATO",
+                   "ERROR_FECHA_PASADA", "ERROR_DOMINGO",
+                   "ERROR_FUERA_DE_HORARIO"):
         valor = getattr(textos, nombre)
         assert "TODO" not in valor and "tu_" not in valor
 
@@ -185,14 +193,30 @@ def test_flujo_completo_de_reserva():
     assert context.user_data["servicio"] == "Corte"
     assert isinstance(mensaje.textos[0][1], ReplyKeyboardRemove)
 
-    # fecha → confirma y termina
+    # fecha → valida, confirma y termina
     update, mensaje = update_de("25/11 15:00")
-    assert asyncio.run(bot.confirmar(update, context)) == ConversationHandler.END
+    with patch.object(
+        bot, "validar_fecha", lambda texto: validar_fecha(texto, AHORA)
+    ):
+        estado = asyncio.run(bot.confirmar(update, context))
+    assert estado == ConversationHandler.END
     confirmacion = mensaje.textos[0][0]
     assert "Ana" in confirmacion
     assert "Corte" in confirmacion
-    assert "25/11 15:00" in confirmacion
+    assert "25/11/2026 15:00" in confirmacion
     assert context.user_data == {}, "no hay que dejar datos de la reserva vieja"
+
+
+def test_confirmar_con_fecha_invalida_vuelve_a_preguntar():
+    context = SimpleNamespace(user_data={"nombre": "Ana", "servicio": "Corte"})
+    update, mensaje = update_de("asdf")
+
+    estado = asyncio.run(bot.confirmar(update, context))
+
+    assert estado == bot.HORA, "tiene que quedarse esperando otra fecha"
+    assert mensaje.textos[0][0].startswith("❌")
+    assert "25/11" in mensaje.textos[0][0], "el error tiene que mostrar el formato"
+    assert context.user_data == {"nombre": "Ana", "servicio": "Corte"}
 
 
 def test_cancelar_limpia_los_datos():

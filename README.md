@@ -4,16 +4,20 @@ Bot para un negocio chico (acá, una peluquería de ejemplo) que atiende a los
 clientes por Telegram: responde las consultas de siempre con botones, manda la
 ubicación en un mapa y toma turnos paso a paso.
 
-> 🚧 **Estado: Días 1 a 3 terminados.** Funcionan `/start`, el menú con botones,
+> 🚧 **Estado: Días 1 a 4 terminados.** Funcionan `/start`, el menú con botones,
 > `/horarios`, `/precios`, `/ubicacion` (con mapa), `/ayuda` y el flujo de
-> reserva con `ConversationHandler` (`/reservar` + `/cancelar`). Los turnos se
-> guardan **en memoria** por ahora; el Día 5 pasan a SQLite.
+> reserva con `ConversationHandler` (`/reservar` + `/cancelar`). Las fechas se
+> validan contra el calendario y el horario de atención. Los turnos se guardan
+> **en memoria** por ahora; el Día 5 pasan a SQLite.
 
 ## Qué hace ahora
 
 - `/start`: saluda y muestra el menú (📅 Reservar turno · 🕒 Horarios · 💲 Precios · 📍 Ubicación).
 - `/reservar`: guía al cliente paso a paso (nombre → servicio → día/hora).
   También se puede iniciar tocando **📅 Reservar turno** en el menú.
+- Valida la fecha: formato, que no sea pasada, que no sea domingo y que esté
+  dentro del horario de atención (sábados hasta más temprano). Si está mal,
+  vuelve a preguntar sin perder lo ya cargado.
 - `/cancelar`: corta la reserva en cualquier paso.
 - `/horarios`, `/precios`, `/ubicacion`: responden también como comandos sueltos.
 - `/ubicacion` manda la dirección y después el mapa con `reply_location`.
@@ -80,11 +84,19 @@ Abrí el bot en Telegram, mandá `/start` y probá los botones. `Ctrl+C` lo fren
    ↓
 ¿Qué día y hora?           → el cliente escribe, ej: 25/11 15:00
    ↓
-✅ Resumen del turno
+validaciones.py revisa formato, fecha futura, domingo y horario
+   ↓
+   ├── si está mal → mensaje de error y vuelve a preguntar (mismo estado HORA)
+   ↓
+✅ Resumen del turno con la fecha completa
 ```
 
 - Los estados (`NOMBRE`, `SERVICIO`, `HORA`) los maneja un `ConversationHandler`.
 - Lo que responde el cliente se guarda en `context.user_data`.
+- Si la fecha es inválida, `confirmar` devuelve `HORA` otra vez: no se pierden
+  el nombre ni el servicio.
+- Acepta `25/11 15:00` y `25/11/2026 15:00`. Sin año, usa el año actual (y en
+  diciembre entiende que un enero es del año siguiente).
 - `/cancelar` funciona en cualquier paso y `/start` también corta la reserva
   y vuelve al menú.
 - **Los turnos viven en memoria**: si el bot se reinicia, se pierden. Pasarlos
@@ -93,10 +105,28 @@ Abrí el bot en Telegram, mandá `/start` y probá los botones. `Ctrl+C` lo fren
 > 💡 El botón del menú entra al mismo flujo que `/reservar` mediante un
 > `CallbackQueryHandler` como `entry_point` de la conversación.
 
+## Validación de fechas
+
+La lógica vive en [`validaciones.py`](validaciones.py), sin nada de Telegram,
+para poder testearla con una fecha fija:
+
+| Regla | Ejemplo rechazado |
+|---|---|
+| Formato `dd/mm hh:mm` o `dd/mm/aaaa hh:mm` | `mañana`, `31/02 15:00` |
+| Tiene que ser futura | hoy a las 9:00 si ya son las 10:00 |
+| Domingos cerrado | domingo 29/11 15:00 |
+| Lunes a viernes 9:00–19:00 | 21:00 u 8:59 |
+| Sábados 9:00–14:00 | sábado 15:00 |
+
+Los horarios están en `textos.py` (`HORARIO_SEMANA` y `HORARIO_SABADO`) y se
+usan tanto para el texto de `/horarios` como para la validación.
+
 ## Personalizarlo para otro negocio
 
 Casi todo está en [`textos.py`](textos.py): nombre, horarios, precios,
-dirección y coordenadas. Para las coordenadas, abrí Google Maps, hacé clic
+dirección y coordenadas. Los horarios son tuplas (`HORARIO_SEMANA`,
+`HORARIO_SABADO`) para que el texto de `/horarios` y la validación de turnos
+usen los mismos números. Para las coordenadas, abrí Google Maps, hacé clic
 derecho sobre el local → "¿Qué hay aquí?" y copiá los dos números en
 `LATITUD` y `LONGITUD`.
 
@@ -107,21 +137,32 @@ otros rubros (por ejemplo "🛠 Servicios" en vez de "💲 Precios").
 
 ```text
 telegram-bot-turnos/
-├── bot.py            # handlers, teclados, conversación y arranque
-├── config.py         # lee TOKEN desde .env y falla con un mensaje claro
-├── textos.py         # textos y datos del negocio (editar acá)
-├── .env.example      # plantilla del .env
+├── bot.py              # handlers, teclados, conversación y arranque
+├── config.py           # lee TOKEN desde .env y falla con un mensaje claro
+├── textos.py           # textos y datos del negocio (editar acá)
+├── validaciones.py     # validación de fechas/horarios, sin Telegram
+├── .env.example        # plantilla del .env
 ├── requirements.txt
+├── requirements-dev.txt
 └── tests/
-    └── test_bot.py   # tests de textos, botones, mapa y flujo de reserva
+    ├── test_bot.py           # textos, botones, mapa y flujo de reserva
+    └── test_validaciones.py  # fechas válidas, pasadas, domingos y horarios
 ```
 
 ## Tests
 
-No necesitan token ni conexión:
+No necesitan token ni conexión. Con pytest:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+También se pueden correr sin pytest, archivo por archivo:
 
 ```bash
 python tests/test_bot.py
+python tests/test_validaciones.py
 ```
 
 ## Seguridad
@@ -136,10 +177,8 @@ python tests/test_bot.py
 
 ## Próximos pasos
 
-1. Día 4: validar la fecha (formato correcto y que no sea del pasado) y volver
-   a preguntar si está mal.
-2. Día 5: guardar los turnos en SQLite y evitar dos reservas en el mismo horario.
-3. Día 6-7: avisarle al dueño por Telegram cuando entra un turno nuevo.
-4. Día 8-9: `/turnos` solo para el dueño (verificando su ID).
-5. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
+1. Día 5: guardar los turnos en SQLite y evitar dos reservas en el mismo horario.
+2. Día 6-7: avisarle al dueño por Telegram cuando entra un turno nuevo.
+3. Día 8-9: `/turnos` solo para el dueño (verificando su ID).
+4. Día 10-12: logging en archivo, despliegue en Railway o Render con el token
    como variable de entorno.

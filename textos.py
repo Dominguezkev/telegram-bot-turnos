@@ -11,10 +11,15 @@ SALUDO = (
     "Puedo responderte las consultas de siempre. ¿Qué necesitás?"
 )
 
+# Horarios de atención: (apertura, cierre), con el cierre exclusivo.
+# Se usan tanto en el texto de /horarios como en validaciones.py.
+HORARIO_SEMANA = (9, 19)
+HORARIO_SABADO = (9, 14)
+
 HORARIOS = (
     "🕒 Horarios de atención\n\n"
-    "Lunes a viernes: 9:00 a 19:00\n"
-    "Sábados: 9:00 a 14:00\n"
+    f"Lunes a viernes: {HORARIO_SEMANA[0]}:00 a {HORARIO_SEMANA[1]}:00\n"
+    f"Sábados: {HORARIO_SABADO[0]}:00 a {HORARIO_SABADO[1]}:00\n"
     "Domingos y feriados: cerrado"
 )
 
@@ -59,8 +64,21 @@ PREGUNTA_SERVICIO = "¿Qué servicio querés?"
 
 PREGUNTA_HORA = (
     "¿Qué día y hora te queda cómodo?\n\n"
-    "Escribilo así: 25/11 15:00\n\n"
+    "Escribilo así: 25/11 15:00\n"
+    "También podés incluir el año: 25/11/2026 15:00\n\n"
     "Podés cancelar cuando quieras con /cancelar."
+)
+
+# Errores de validación (los usa validaciones.py).
+ERROR_FECHA_FORMATO = (
+    "No entendí la fecha. Escribila así: 25/11 15:00 "
+    "o 25/11/2026 15:00."
+)
+ERROR_FECHA_PASADA = "Esa fecha ya pasó. Elegí una futura."
+ERROR_DOMINGO = "Los domingos no atendemos. Elegí de lunes a sábado."
+ERROR_FUERA_DE_HORARIO = (
+    "Fuera del horario de atención: lunes a viernes de 9:00 a 19:00 "
+    "y sábados de 9:00 a 14:00."
 )
 
 CONFIRMACION = (

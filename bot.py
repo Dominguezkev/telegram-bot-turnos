@@ -1,10 +1,11 @@
-"""Bot de Telegram para una peluquería — Días 1 a 3 del proyecto.
+"""Bot de Telegram para una peluquería — Días 1 a 4 del proyecto.
 
 Hoy hace cuatro cosas:
 - /start muestra un menú con botones.
 - Responde horarios, precios y ubicación (también como comandos).
 - Manda el mapa del local con reply_location.
-- /reservar guía al cliente paso a paso: nombre → servicio → día/hora.
+- /reservar guía al cliente paso a paso: nombre → servicio → día/hora,
+  validando que la fecha sea futura y esté dentro del horario de atención.
 
 La reserva se guarda en memoria por ahora; en el próximo paso va a SQLite.
 
@@ -39,6 +40,7 @@ from telegram.ext import (
 
 import textos
 from config import obtener_token
+from validaciones import validar_fecha
 
 logger = logging.getLogger(__name__)
 
@@ -160,13 +162,24 @@ async def pedir_hora(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def confirmar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Paso 3: muestra el resumen y cierra la conversación."""
+    """Paso 3: valida la fecha, muestra el resumen y cierra la conversación."""
+    fecha, error = validar_fecha(update.message.text)
+
+    if error:
+        # Devolvemos el MISMO estado para que el ConversationHandler vuelva a
+        # esperar la fecha, sin perder el nombre ni el servicio ya elegidos.
+        await update.message.reply_text(
+            f"❌ {error}\n\nProbá de nuevo (o mandá /cancelar).",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return HORA
+
     datos = context.user_data
     await update.message.reply_text(
         textos.CONFIRMACION.format(
             nombre=datos["nombre"],
             servicio=datos["servicio"],
-            cuando=update.message.text.strip(),
+            cuando=fecha.strftime("%d/%m/%Y %H:%M"),
         ),
         reply_markup=ReplyKeyboardRemove(),
     )
